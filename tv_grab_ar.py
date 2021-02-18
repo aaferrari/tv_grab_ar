@@ -92,6 +92,9 @@ import sys
 from time import sleep
 from urllib import quote_plus
 import urllib2
+from multiprocessing.pool import ThreadPool
+from functools import partial
+from socket import error as socket_error
 
 
 VERSION = '2015.03.02-1'
@@ -100,6 +103,7 @@ DATETIME_FMT = '%Y%m%d%H%M %Z'
 TVTIME_CONFIG_DIR = expanduser('~/.tvtime')
 XMLTV_CONFIG_DIR = expanduser('~/.xmltv')
 SLEEP_TIME = 1.3
+THREADS = 20
 
 
 def parse_style(styledef):
@@ -683,6 +687,14 @@ class TvGrabAr:
             programs += self.parse_row_data(currentday, row)
         return programs
 
+    def get_program_data(self, channelid, currentday, accordion):
+        """Obtiene los datos de un programa."""
+        # cada acordeon es una emision de un show
+        if len(accordion) == 0: return None
+        prog = self.parse_program(channelid, currentday, accordion)
+        if prog is not None: return prog
+        else: return None
+
     def parse_row_data(self, currentday, row):
         """Interpretar las celdas de un renglon de la grilla de programacion."""
         programs = []
@@ -690,12 +702,9 @@ class TvGrabAr:
         if row.get('idsignal') is None:
             return programs
         channelid = int(row.get('idsignal'))
-        for accordion in row:
-            # cada acordeon es una emision de un show
-            if len(accordion) == 0: continue
-            prog = self.parse_program(channelid, currentday, accordion)
-            if prog is not None:
-                programs.append(prog)
+        # Necesario para poder ejecutar funciones con varios parametros de manera concurrente
+        parcializado = partial(self.get_program_data, channelid, currentday)
+        programs = global_pool.map(parcializado, row)
         return programs
 
     def parse_program(self, channelid, startday, div):
@@ -746,6 +755,10 @@ class TvGrabAr:
         except urllib2.URLError, e:
             # ante algun error al obtener la descripcion, omitirla
             print >> sys.stderr, 'URL error: %s ' % str(e)
+            return {}
+        except socket_error, e:
+            # ante algun error al obtener la descripcion, omitirla
+            print >> sys.stderr, 'Socket error: %s ' % str(e)
             return {}
         divFicha = body.find(".//div[@class='ficha']/div/div")
         if divFicha is None:
@@ -1114,5 +1127,6 @@ if __name__ == '__main__':
     elif args.configure:
         app.configure()
     else:
+        global_pool = ThreadPool(processes=THREADS, initializer=None)
         app.grab()
 
