@@ -77,6 +77,7 @@
 # 2009.09.16-1     Version inicial
 #
 
+from __future__ import print_function
 import argparse
 import codecs
 from datetime import datetime, date, time, timedelta, tzinfo
@@ -84,17 +85,27 @@ import json
 from lxml import etree, html
 from os import mkdir, rename
 from os.path import basename, dirname, expanduser, join, isdir, isfile, splitext
-import cPickle
 import re
 from shutil import copy
-from StringIO import StringIO
 import sys
 from time import sleep
-from urllib import quote_plus
-import urllib2
 from multiprocessing.pool import ThreadPool
-from functools import partial
+from functools import partial, cmp_to_key
 from socket import error as socket_error
+from threading import Lock
+# Codigo necesario para mantener la retrocompatibilidad con Python 2
+if sys.version_info.major == 2:
+    import cPickle
+    from StringIO import StringIO
+    from urllib import quote_plus
+    import urllib2
+elif sys.version_info.major == 3:
+    from urllib import request as urllib2
+    import pickle as cPickle
+    from io import StringIO
+    from urllib.parse import quote_plus
+    from imp import reload
+    xrange = range
 
 
 VERSION = '2015.03.02-1'
@@ -105,6 +116,12 @@ XMLTV_CONFIG_DIR = expanduser('~/.xmltv')
 SLEEP_TIME = 1.3
 THREADS = 20
 
+s_print_lock = Lock()
+
+def s_print(*a, **b):
+    """Funcion print para multihilo"""
+    with s_print_lock:
+        print(*a, **b)
 
 def parse_style(styledef):
     """Obtener una serie de pares (clave, valor) a partir de una linea de
@@ -142,9 +159,10 @@ def fix_encoding(text):
 
 def completar_titulo(titulo_trunco, titulo_completo):
     """Completar una cadena trunca a partir de otra en mayusculas."""
+    correcto = titulo_trunco[:-3]
     if titulo_trunco.endswith('...') and \
-       len(titulo_trunco) - 3 < len(titulo_completo):
-        correcto = titulo_trunco[:-3]
+       len(correcto) < len(titulo_completo) and \
+       titulo_completo.lower().startswith(correcto.lower()) == True:
         return correcto + titulo_completo[len(correcto):].lower()
     return titulo_trunco
 
@@ -498,13 +516,13 @@ class TvGrabAr:
 
     def description(self):
         """Retornar la descripcion del script."""
-        print 'Argentina (%s)' % self.base_domain
+        print('Argentina (%s)' % self.base_domain)
 
     def capabilities(self):
         """Retornar las capacidades del script."""
-        print 'baseline'
-        print 'manualconfig'
-        print 'cache'
+        print('baseline')
+        print('manualconfig')
+        print('cache')
 
     def get_config_zona(self):
         """Tomar la zona indicada desde linea de comandos, o la existente en
@@ -534,12 +552,12 @@ class TvGrabAr:
         """Obtener la lista de provincias desde el sitio web."""
         url = self.base_url + '/ProvinceSelector.aspx'
         if self.options.verbose:
-            print 'Retrieving %s ... ' % url
+            print('Retrieving %s ... ' % url)
         try:
             response = json.load(self.opener.open(url))
         except:
-            print 'No locations found online.'
-            print 'Maybe the website is offline or it has been recently redesigned.'
+            print('No locations found online.')
+            print('Maybe the website is offline or it has been recently redesigned.')
             return {}
         else:
             return [x.values()[0] for x in response['rows']]
@@ -549,18 +567,18 @@ class TvGrabAr:
         locations = {}
         url = self.base_url + '/LocalitySelector.aspx?province=' + quote_plus(province)
         if self.options.verbose:
-            print 'Retrieving %s ... ' % url
+            print('Retrieving %s ... ' % url)
         try:
             response = json.load(self.opener.open(url))
         except:
-            print 'No locations found online.'
-            print 'Maybe the website is offline or it has been recently redesigned.'
+            print('No locations found online.')
+            print('Maybe the website is offline or it has been recently redesigned.')
             return locations
         else:
             for row in response['rows']:
                 locations[int(row['Id'])] = row
             if self.options.verbose:
-                print 'Found %d locations available.' % len(locations)
+                print('Found %d locations available.' % len(locations))
             return locations
 
     def retrieve_channels(self):
@@ -570,12 +588,12 @@ class TvGrabAr:
         if self.codigo_zona is not None:
             url += '?cl=%d' % self.codigo_zona
         if self.options.verbose:
-            print >> sys.stderr, 'Retrieving %s ... ' % url
+            print('Retrieving %s ... ' % url, file = sys.stderr)
         try:
             body = html.parse(self.opener.open(url))
         except:
-            print >> sys.stderr, 'No channels found online.'
-            print >> sys.stderr, 'Maybe the website is offline or it has been recently redesigned.'
+            print('No channels found online.', file = sys.stderr)
+            print('Maybe the website is offline or it has been recently redesigned.', file = sys.stderr)
             return channels
         grilla = body.find(".//select[@id='ChannelChoice']")
         hidden_digClasId = body.find(".//input[@id='digClasId']")
@@ -584,8 +602,8 @@ class TvGrabAr:
         hidden_sintoniaChanels = body.find(".//input[@id='sintoniaChanels']")
         if grilla is None or hidden_digClasId is None or hidden_digHd is None or \
            hidden_idsChanels is None or hidden_sintoniaChanels is None:
-            print >> sys.stderr, 'No channels found online.'
-            print >> sys.stderr, 'Maybe the website is offline or it has been recently redesigned.'
+            print('No channels found online.', file = sys.stderr)
+            print('Maybe the website is offline or it has been recently redesigned.', file = sys.stderr)
             return channels
         self.digClasId = hidden_digClasId.get('value')
         self.digHd = 1 if hidden_digHd.get('value') != 'true' else 2
@@ -607,7 +625,7 @@ class TvGrabAr:
                 channels[channid].icon = img.get('src')
                 channels[channid].description = img.get('alt').strip()
         if self.options.verbose:
-            print >> sys.stderr, 'Found %d channels online.' % len(channels)
+            print('Found %d channels online.' % len(channels), file = sys.stderr)
         return channels
 
     def retrieve_days(self, channels, firstDay):
@@ -626,20 +644,20 @@ class TvGrabAr:
                 batch = channels[i:i+nbatch]
                 try:
                     programs += self.retrieve_day(batch, nday, currentday)
-                except urllib2.HTTPError, e:
+                except urllib2.HTTPError as e:
                     # ante algun error de HTTP, intentar canal por canal
                     for channel in batch:
                         try:
                             programs += self.retrieve_day([channel], nday, currentday)
-                        except urllib2.HTTPError, e:
-                            print >> sys.stderr, 'HTTP error: %s ' % str(e)
-                except urllib2.URLError, e:
+                        except urllib2.HTTPError as e:
+                            s_print('HTTP error: %s ' % str(e), file = sys.stderr)
+                except urllib2.URLError as e:
                     # ante otro error, omitir la programacion de la misma
-                    print >> sys.stderr, 'URL error: %s ' % str(e)
+                    s_print('URL error: %s ' % str(e), file = sys.stderr)
                 i += nbatch
             currentday += timedelta(days=1)
         if self.options.verbose:
-            print >> sys.stderr, 'Found %d programs.' % len(programs)
+            print('Found %d programs.' % len(programs), file = sys.stderr)
         return programs
 
     def retrieve_day(self, batch, nday, currentday):
@@ -678,7 +696,7 @@ class TvGrabAr:
         url = '/TVGridWS/TvGridWS.asmx/ReloadGrid'
         if self.options.verbose:
             # print >> sys.stderr, request_body
-            print >> sys.stderr, 'Retrieving %s (%s|%d)' % (url, signalsIdsReceived, hoursel)
+            print('Retrieving %s - %s' % (url, request_body), file = sys.stderr)
         response = self.json_request(self.base_url + url, request_body)
         sleep(SLEEP_TIME)
         programs = []
@@ -713,10 +731,7 @@ class TvGrabAr:
         """
         prog = XmltvProgram()
         prog.channel = channelid
-        try:
-            title = div[0][0].text.strip()
-        except AttributeError:
-            title = div[0].text_content().strip()
+        title = div[0].cssselect("span")[0].text.strip()
         prog.title = fix_encoding(title)
         prog.ficha = int(remove_letters(div.get('id')))
         style = parse_style(div.get('style'))
@@ -748,17 +763,17 @@ class TvGrabAr:
         try:
             sleep(SLEEP_TIME)
             body = html.parse(self.opener.open(self.base_url + url))
-        except urllib2.HTTPError, e:
+        except urllib2.HTTPError as e:
             # ante algun error al obtener la descripcion, omitirla
-            print >> sys.stderr, 'HTTP error: %s ' % str(e)
+            s_print('HTTP error: %s ' % str(e), file = sys.stderr)
             return {}
-        except urllib2.URLError, e:
+        except urllib2.URLError as e:
             # ante algun error al obtener la descripcion, omitirla
-            print >> sys.stderr, 'URL error: %s ' % str(e)
+            s_print('URL error: %s ' % str(e), file = sys.stderr)
             return {}
-        except socket_error, e:
+        except socket_error as e:
             # ante algun error al obtener la descripcion, omitirla
-            print >> sys.stderr, 'Socket error: %s ' % str(e)
+            s_print('Socket error: %s ' % str(e), file = sys.stderr)
             return {}
         divFicha = body.find(".//div[@class='ficha']/div/div")
         if divFicha is None:
@@ -823,7 +838,7 @@ class TvGrabAr:
         if tupla in self.fichas:
             # si la respuesta ya estaba en el cache
             if self.options.verbose:
-                print >> sys.stderr, 'Skipping %s ...' % url
+                s_print('Skipping %s ...' % url, file = sys.stderr)
             (prog.description, prog.data) = self.fichas[tupla]
             prog.data.update(data)
             # tratar de obtener el titulo completo del show
@@ -832,7 +847,7 @@ class TvGrabAr:
             return
         # si la respuesta no estaba en cache
         if self.options.verbose:
-            print >> sys.stderr, 'Retrieving %s ...' % url
+            s_print('Retrieving %s ...' % url, file = sys.stderr)
         # metodo 1
         # por eficiencia y por lo sencillo de la estructura no uso json.dumps
         # request_body = '{"idEvent": "%d", "idSignal": "%d", "sitio": ""}' % (prog.ficha, prog.channel)
@@ -861,7 +876,7 @@ class TvGrabAr:
         """Solicitar al usuario los canales que desea recuperar."""
         channels = self.retrieve_channels()
         chanlist = channels.values()
-        chanlist = sorted(chanlist, cmp=lambda x,y: x.number - y.number)
+        chanlist = sorted(chanlist, key=cmp_to_key(lambda x,y: x.number - y.number))
         add_all = False
         skip_all = False
         for channel in chanlist:
@@ -882,10 +897,10 @@ class TvGrabAr:
                     skip_all = True
             elif add_all:
                 channel.enabled = True
-                print prompt + 'yes'
+                print(prompt + 'yes')
             elif skip_all:
                 channel.enabled = False
-                print prompt + 'no'
+                print(prompt + 'no')
         return chanlist
 
     def select_location(self):
@@ -897,7 +912,7 @@ class TvGrabAr:
         selected = None
         while selected < 0 or selected >= len(provinces):
             for code, name in enumerate(provinces):
-                print "%2d. %-30s  " % (code+1, name[:30])
+                print("%2d. %-30s  " % (code+1, name[:30]))
             try:
                 selected = int(raw_input('enter your province code: ')) - 1
             except ValueError:
@@ -911,7 +926,7 @@ class TvGrabAr:
             for code, row in ordenadas:
                 c += 1
                 r += 1
-                print "%4d. %-30s  " % (int(code), row['Localidad'][:30]),
+                print("%4d. %-30s  " % (int(code), row['Localidad'][:30]),)
                 if c == 2:
                     print
                     c = 0
@@ -925,7 +940,7 @@ class TvGrabAr:
                 pass
         self.codigo_zona = selected
         self.nombre_zona = locations[selected]['Localidad']
-        print 'selected location: %4d. %s' % (selected, self.nombre_zona)
+        print('selected location: %4d. %s' % (selected, self.nombre_zona))
 
     def configure(self):
         """Configurar el script."""
@@ -939,7 +954,7 @@ class TvGrabAr:
             if not channel.enabled: conf.write('#')
             conf.write(u'channel %d %s\n' % (channel.id, channel.name))
         conf.close()
-        print 'Finished configuration.'
+        print('Finished configuration.')
 
     def set_enabled_channels(self, channels):
         """Leer del archivo de configuracion la lista de canales activos para
@@ -959,12 +974,15 @@ class TvGrabAr:
             if int(id_) in channels:
                 channels[int(id_)].enabled = True
         if self.options.verbose:
-            print >> sys.stderr, 'Found %d channels enabled.' % enabled
+            print('Found %d channels enabled.' % enabled, file = sys.stderr)
         return True
 
     def sort_programs(self, programs):
         """Ordenar una lista de programas segun su hora de inicio."""
-        return sorted(programs, cmp=lambda x,y: int((x.start - y.start).total_seconds()))
+        
+        # Quitamos elementos nulos para evitar excepciones
+        programs = [program for program in programs if program != None]
+        return sorted(programs, key=cmp_to_key(lambda x,y: int((x.start - y.start).total_seconds())))
 
     def count_programs(self, channels, programs):
         """Contar la cantidad de programas de cada canal."""
@@ -979,7 +997,7 @@ class TvGrabAr:
             mkdir(dirname(self.options.cache_file))
         for ntry in range(3):
             if self.options.verbose:
-                print >> sys.stderr, 'Reading program card cache ... ',
+                print('Reading program card cache ... ', file = sys.stderr)
             try:
                 fh = open(self.options.cache_file, 'rb')
                 self.fichas = cPickle.load(fh)
@@ -990,19 +1008,19 @@ class TvGrabAr:
                 fichasbak = base + '.bak'
                 if isfile(fichasbak):
                     if self.options.verbose:
-                        print >> sys.stderr, 'corrupt file, using backup'
+                        print('corrupt file, using backup', file = sys.stderr)
                         copy(fichasbak, self.options.cache_file)
                 else:
                     if self.options.verbose:
-                        print >> sys.stderr, 'corrupt file, discarded'
+                        print('corrupt file, discarded', file = sys.stderr)
                     rename(self.options.cache_file, base + '.old')
             except IOError:
                 if self.options.verbose:
-                    print >> sys.stderr, 'could not load %s' % self.options.cache_file
+                    print('could not load %s' % self.options.cache_file, file = sys.stderr)
                 break
             else:
                 if self.options.verbose:
-                    print >> sys.stderr, '%d programs known.' % len(self.fichas)
+                    print('%d programs known.' % len(self.fichas), file = sys.stderr)
                 break
 
     def save_fichas(self):
@@ -1010,30 +1028,30 @@ class TvGrabAr:
         if not isdir(dirname(self.options.cache_file)):
             mkdir(dirname(self.options.cache_file))
         if self.options.verbose:
-            print >> sys.stderr, 'Saving program card cache ... ',
+            print('Saving program card cache ... ', file = sys.stderr)
         try:
             fh = open(self.options.cache_file, 'wb')
             cPickle.dump(self.fichas, fh)
             fh.close()
             if self.options.verbose:
-                print >> sys.stderr, 'done.'
+                print('done.', file = sys.stderr)
             # backup del archivo de fichas
             base, ext = splitext(self.options.cache_file)
             copy(self.options.cache_file, base + '.bak')
         except IOError:
             if self.options.verbose:
-                print >> sys.stderr, 'could not write %s' % self.options.cache_file
+                print('could not write %s' % self.options.cache_file, file = sys.stderr)
 
     def grab(self):
         """Descargar informacion de programacion."""
         startdate = datetime.today().strftime(DATETIME_FMT)
         if self.codigo_zona is None: self.get_config_zona()
         if self.options.verbose:
-            print >> sys.stderr, 'Getting list of channels'
+            print('Getting list of channels', file = sys.stderr)
         channels = self.retrieve_channels()
         if not self.set_enabled_channels(channels):
-            print >> sys.stderr, "Please run './tv_grab_ar.py --configure' first."
-            print >> sys.stderr, ''
+            print("Please run './tv_grab_ar.py --configure' first.", file = sys.stderr)
+            print('', file = sys.stderr)
             return
 
         xml = Writer(
@@ -1045,7 +1063,7 @@ class TvGrabAr:
             generator_info_url='http://maurom.com/blog/2010/02/03/tvtime-xmltv-tv_grab_ar-py'
         )
 
-        ordenados = sorted(channels.values(), cmp=lambda x,y: x.number - y.number)
+        ordenados = sorted(channels.values(), key=cmp_to_key(lambda x,y: x.number - y.number))
         if self.options.list_channels:
             # informar todos los canales, ordenados por numero
             for channel in ordenados:
@@ -1068,12 +1086,12 @@ class TvGrabAr:
         if self.options.output:
             xml.writetofile(self.options.output)
         else:
-            print xml.tostring()
+            print(xml.tostring())
 
 
 if __name__ == '__main__':
     reload(sys)
-    sys.setdefaultencoding('utf-8')
+    if sys.version_info.major == 2: sys.setdefaultencoding('utf-8')
 
     parser = argparse.ArgumentParser(
         description='Get Argentinian television listings in XMLTV format'
@@ -1115,7 +1133,7 @@ if __name__ == '__main__':
     if args.offset < 0: parser.error('offset must not be negative')
 
     if args.verbose:
-        print >> sys.stderr, 'tv_grab_ar.py %s\n' % VERSION
+        print('tv_grab_ar.py %s\n' % VERSION, file = sys.stderr)
 
     app = TvGrabAr()
     app.options = args
