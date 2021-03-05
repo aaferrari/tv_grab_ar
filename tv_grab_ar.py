@@ -106,6 +106,8 @@ elif sys.version_info.major == 3:
     from urllib.parse import quote_plus
     from imp import reload
     xrange = range
+    unicode = str
+    raw_input = input
 
 
 VERSION = '2015.03.02-1'
@@ -219,7 +221,7 @@ class Writer:
 <tv date="%s" generator-info-name="%s" generator-info-url="%s" source-info-name="%s" source-info-url="%s">
 </tv>
 '''
-        return template % (
+        output = template % (
             self.encoding,
             self.datestr,
             self.generator_info_name,
@@ -227,6 +229,9 @@ class Writer:
             self.source_info_name,
             self.source_info_url,
         )
+        if sys.version_info.major == 3:
+            output = re.sub('encoding="[^"]+"', "", output)
+        return output
 
     def channel_to_xml(self, d):
         """Retornar un ElementTree a partir de un diccionario que representa
@@ -372,7 +377,10 @@ class XmltvChannel:
         return d
 
     def __str__(self):
-        return '%3d - %s (id %d)' % (self.number, self.name.encode('utf-8'), self.id)
+        if sys.version_info.major == 2:
+            return '%3d - %s (id %d)' % (self.number, self.name.encode('utf-8'), self.id)
+        elif sys.version_info.major == 3:
+            return '%3d - %s (id %d)' % (self.number, self.name, self.id)
 
 
 class XmltvProgram:
@@ -560,7 +568,7 @@ class TvGrabAr:
             print('Maybe the website is offline or it has been recently redesigned.')
             return {}
         else:
-            return [x.values()[0] for x in response['rows']]
+            return [list(x.values())[0] for x in response['rows']]
 
     def retrieve_locations(self, province):
         """Obtener la lista de localidades desde el sitio web."""
@@ -675,6 +683,8 @@ class TvGrabAr:
             'Referer': self.base_url,
             'Content-Length': len(request_body),
         }
+        if sys.version_info.major == 3:
+            request_body = request_body.encode("utf-8")
         req = urllib2.Request(url, request_body, headers)
         return json.load(self.opener.open(req))
 
@@ -698,7 +708,7 @@ class TvGrabAr:
             # print >> sys.stderr, request_body
             print('Retrieving %s - %s' % (url, request_body), file = sys.stderr)
         response = self.json_request(self.base_url + url, request_body)
-        sleep(SLEEP_TIME)
+        sleep(self.options.sleep_time)
         programs = []
         rows = html.fragment_fromstring(response['d'], True)
         for row in rows:
@@ -761,7 +771,7 @@ class TvGrabAr:
         # url = '/FichaContent.aspx?id=%d&idSig=%d' % tupla          # metodo 2
         data = { 'url': self.base_url + url }
         try:
-            sleep(SLEEP_TIME)
+            sleep(self.options.sleep_time)
             body = html.parse(self.opener.open(self.base_url + url))
         except urllib2.HTTPError as e:
             # ante algun error al obtener la descripcion, omitirla
@@ -909,7 +919,7 @@ class TvGrabAr:
         """
         provinces = self.retrieve_provinces()
         if not provinces: return
-        selected = None
+        selected = -1
         while selected < 0 or selected >= len(provinces):
             for code, name in enumerate(provinces):
                 print("%2d. %-30s  " % (code+1, name[:30]))
@@ -1031,7 +1041,7 @@ class TvGrabAr:
             print('Saving program card cache ... ', file = sys.stderr)
         try:
             fh = open(self.options.cache_file, 'wb')
-            cPickle.dump(self.fichas, fh)
+            cPickle.dump(self.fichas, fh, protocol=2)
             fh.close()
             if self.options.verbose:
                 print('done.', file = sys.stderr)
@@ -1126,6 +1136,10 @@ if __name__ == '__main__':
     parser.add_argument('--cache', dest='cache_file', metavar='FILE',
         default=join(XMLTV_CONFIG_DIR, 'tv_grab_ar.db'),
         help='Cache description data in FILE. The default is <' + join(XMLTV_CONFIG_DIR, 'tv_grab_ar.db') + '>.')
+    parser.add_argument('--sleep', type=float, dest='sleep_time', metavar='N', default=SLEEP_TIME,
+        help='Seconds that the program will wait between each request to the server. The default is %.1f seconds' % SLEEP_TIME)
+    parser.add_argument('--threads', type=int, dest='threads', metavar='N', default=THREADS,
+        help='Number of requests to the server that will be done at the same time. The default is %i threads' % THREADS)
     parser.add_argument('--version', action='version', version='%(prog)s ' + VERSION)
 
     args = parser.parse_args()
@@ -1145,6 +1159,6 @@ if __name__ == '__main__':
     elif args.configure:
         app.configure()
     else:
-        global_pool = ThreadPool(processes=THREADS, initializer=None)
+        global_pool = ThreadPool(processes=app.options.threads, initializer=None)
         app.grab()
 
