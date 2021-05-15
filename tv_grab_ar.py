@@ -2,8 +2,9 @@
 #
 # tv_grab_ar.py
 #
-# Copyright 2009-2014, Mauro A. Meloni <maurom1982@yahoo.com.ar>
+# Copyright 2009-2015, Mauro A. Meloni <maurom1982 [at] yahoo.com.ar>
 # http://maurom.com/blog/2010/02/03/tvtime-xmltv-tv_grab_ar-py
+# Copyright 2021, Agustin Ferrari <agustinferrari [at] gmx.com>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,63 +19,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-#
-# Version history:
-#
-# 2015.03.02-1     Fix sutil al problema de encoding/decoding de titulos
-# 2014.02.22-1     Adaptacion del codigo a PEP-8
-# 2014.10.22-1     Re-incorporacion del cache y descarga de descripciones
-# 2014.10.16-1     Fix sutil por cambio en el disenio del sitio web
-# 2014.06.21-2     Salida de temporada y episodio en formato xmltv_ns
-# 2014.06.21-1     Fix sutil para descargar la programacion nocturna
-# 2014.06.20-1     Fixes por separacion en horas al obtener la grilla de datos
-# 2013.11.17-1     Fix para cuando es incorrecta la hora de un programa
-# 2013.11.10-1     Fix para cuando no puede obtenerse el nro de episodio
-# 2013.10.19-1rc   Seleccion correcta de la zona previo a la descarga
-# 2013.10.08-4rc   Conversion desde optparse a argparse
-# 2013.10.08-3rc   Implementacion de parametros days y offset
-# 2013.10.08-2rc   Fixes para que valide contra xmltv.dtd
-# 2013.10.08-1rc   Nuevo metodo de descarga de grilla y fichas
-# 2013.10.07-1rc   Reescritura completa por cambio en el sitio web
-# 2012.12.04-1     Fix sutil por cambio en el disenio del sitio web
-# 2012.05.02-1     Tratamiento de excepcion ante errores de HTTP y DNS
-# 2012.04.04-1     Tratamiento de excepcion ante fichaId invalida
-# 2012.03.24-1     Solo se guarda el cache al fin del proceso (faster!)
-# 2011.12.25-1     Los mensajes de informacion van ahora a stderr
-# 2011.12.22-1     (Bug)fixes en la seleccion de zona y canales
-# 2011.09.16-1     Nueva recuperacion de canales por redisenio de la web
-# 2011.09.15-1     Salida de fecha y hora utilizando huso horario UTC
-# 2011.09.14-1     Implementados switches capabilities y description
-# 2011.06.06-1     Backup del archivo de fichas en caso de corrupcion
-# 2011.05.30-1     Fix error de codificacion al mostrar la lista de zonas
-# 2011.04.27-1     Fix p/despliegue de nombres de canal (gracias a Donato)
-# 2011.03.11-1     Adicion de cambio de zona (gracias a Mariano Cosentino)
-# 2010.11.19-1     Modificacion para que lea el genero de los programas
-# 2010.10.16-1     Posibilidad de obtener grilla de la semana posterior
-# 2010.09.13-1     Crea directorios de configuracion si no existen
-# 2010.09.11-1     Adicion de posibilidad de cambio de zona
-# 2010.09.06-1     Fix para fichaId vacia
-# 2010.08.24-1     Nuevas rutinas debido al redisenio del sitio web
-# 2010.08.19-1     Pretty-Print XML
-# 2010.08.18-1     Adicion de esperas para evitar saturar al servidor
-# 2010.08.17-1     Conversion desde beautifulsoup a lxml (faster!)
-# 2010.07.19-1     Fix para manejar los valores de canales en el menu
-# 2010.05.19-1     Crear cookie de zona en vez de obtenerla del sitio
-# 2010.04.27-1     Cambio de url para retrieve_descriptions
-# 2010.04.25-1     Cambio de url para retrieve_programs
-# 2010.04.06-1     Manejo de excepcion al obtener las descripciones
-# 2010.03.31-2     Manejo de excepcion al obtener la programacion semanal
-# 2010.03.31-1     Multicanal es ahora Cablevision
-# 2009.09.21-1     Fix para multicanal, que tiene mal el nro de TCM
-# 2009.09.17-3     Despliegue de genero como subtitulo
-#            2     Fix para programas emitidos en dias sucesivos
-# 2009.09.17-1     Correccion de stationlist.xml
-# 2009.09.16-6     Xmltv Writer ad hoc
-#            5     Descarga de canales ordenados por id
-#            4     Cache de fichas
-#            3     Fixes a temas de encoding
-#            2     Recuperacion de descripciones
-# 2009.09.16-1     Version inicial
 #
 
 from __future__ import print_function
@@ -110,10 +54,9 @@ elif sys.version_info.major == 3:
     raw_input = input
 
 
-VERSION = '2015.03.02-1'
+VERSION = '2021.05.15-1'
 LANG = u'es'
 DATETIME_FMT = '%Y%m%d%H%M %Z'
-TVTIME_CONFIG_DIR = expanduser('~/.tvtime')
 XMLTV_CONFIG_DIR = expanduser('~/.xmltv')
 SLEEP_TIME = 1.3
 THREADS = 20
@@ -169,7 +112,7 @@ def completar_titulo(titulo_trunco, titulo_completo):
     return titulo_trunco
 
 
-class GMT (tzinfo):
+class GMT(tzinfo):
     """Zona horaria."""
 
     def __init__(self, offset):
@@ -192,7 +135,7 @@ class GMT (tzinfo):
         return self.__name
 
 
-class Writer:
+class Writer():
     """Generador de XML."""
 
     def __init__(self, datestr, encoding, source_info_url, source_info_name, generator_info_name, generator_info_url):
@@ -253,7 +196,7 @@ class Writer:
             'start': d['start'],
             'stop': d['stop'],
         }
-        credits = None
+        prog_credits = None
         elem = etree.Element('programme', attrs)
         if 'title' in d:
             itemtext, itemlang = d['title']
@@ -265,15 +208,15 @@ class Writer:
             for (itemtext, itemlang) in d['desc']:
                 etree.SubElement(elem, 'desc', { 'lang': itemlang } ).text = itemtext
         if 'directors' in d:
-            if credits is None:
-                credits = etree.SubElement(elem, 'credits')
+            if prog_credits is None:
+                prog_credits = etree.SubElement(elem, 'credits')
             for name in d['directors']:
-                etree.SubElement(credits, 'director').text = name
+                etree.SubElement(prog_credits, 'director').text = name
         if 'actors' in d:
-            if credits is None:
-                credits = etree.SubElement(elem, 'credits')
+            if prog_credits is None:
+                prog_credits = etree.SubElement(elem, 'credits')
             for name in d['actors']:
-                etree.SubElement(credits, 'actor').text = name
+                etree.SubElement(prog_credits, 'actor').text = name
         if 'date' in d:
             etree.SubElement(elem, 'date').text = d['date']
         if 'category' in d:
@@ -351,7 +294,7 @@ class Writer:
         return data
 
 
-class XmltvChannel:
+class XmltvChannel():
     """Canal de television."""
 
     def __init__(self, id_, number, name):
@@ -383,7 +326,7 @@ class XmltvChannel:
             return '%3d - %s (id %d)' % (self.number, self.name, self.id)
 
 
-class XmltvProgram:
+class XmltvProgram():
     """Programa de television."""
 
     def __init__(self):
@@ -484,7 +427,7 @@ class XmltvProgram:
     def __str__(self):
         retval = ''
         if self.channel is not None:
-            retval  = 'Channel: \t%s\n' % self.channel
+            retval = 'Channel: \t%s\n' % self.channel
         retval += 'Title: \t%s\n' % self.title.encode('utf-8')
         retval += 'Description: \t%s\n' % self.description
         if self.start is not None:
@@ -502,7 +445,7 @@ class XmltvProgram:
         return retval
 
 
-class TvGrabAr:
+class TvGrabAr():
 
     TIME_CONST = 30.0 / 102 * 60
 
@@ -514,7 +457,7 @@ class TvGrabAr:
             self.base_domain = 'buscador.cablevisionfibertel.com.ar'
             self.base_url = 'https://' + self.base_domain
         self.opener = urllib2.build_opener(urllib2.ProxyHandler())
-        self.input_timezone  = GMT(-3)   # zona horaria de la grilla
+        self.input_timezone = GMT(-3)   # zona horaria de la grilla
         self.output_timezone = GMT(0)    # salida en UTC por defecto
         self.fichas = {}
         self.codigo_zona = None
@@ -612,6 +555,7 @@ class TvGrabAr:
            hidden_idsChanels is None or hidden_sintoniaChanels is None:
             print('No channels found online.', file = sys.stderr)
             print('Maybe the website is offline or it has been recently redesigned.', file = sys.stderr)
+            quit(1)
             return channels
         self.digClasId = hidden_digClasId.get('value')
         self.digHd = 1 if hidden_digHd.get('value') != 'true' else 2
@@ -643,7 +587,7 @@ class TvGrabAr:
         nchannels = len(channels)
         nbatch = 12
         programs = []
-        currentday  = datetime.combine(firstDay, time(0,0,0))
+        currentday = datetime.combine(firstDay, time(0,0,0))
         currentday += timedelta(days=self.options.offset)
         for nday in range(self.options.offset, self.options.offset + self.options.days):
             i = 0
@@ -664,6 +608,7 @@ class TvGrabAr:
                     s_print('URL error: %s ' % str(e), file = sys.stderr)
                 i += nbatch
             currentday += timedelta(days=1)
+        programs = self.clean_programs(programs)
         if self.options.verbose:
             print('Found %d programs.' % len(programs), file = sys.stderr)
         return programs
@@ -693,7 +638,7 @@ class TvGrabAr:
         y una banda horaria determinada.
         """
         # hoursel va de 1 a 6, donde 1 = 00:00, 2 = 04:00, y asi...
-        signalsIdsReceived  = ','.join(str(c.id) for c in batch) + '|'
+        signalsIdsReceived = ','.join(str(c.id) for c in batch) + '|'
         signalsIdsReceived += ','.join(str(c.number) for c in batch)
         request_body = json.dumps({
             'daySel': str(nday),
@@ -846,15 +791,18 @@ class TvGrabAr:
         # url = '/TVGridWS/TvGridWS.asmx/GetProgramDataAcordeon'   # metodo 1
         url = '/FichaContent.aspx?id=%d&idSig=%d' % tupla          # metodo 2
         if tupla in self.fichas:
-            # si la respuesta ya estaba en el cache
-            if self.options.verbose:
-                s_print('Skipping %s ...' % url, file = sys.stderr)
-            (prog.description, prog.data) = self.fichas[tupla]
-            prog.data.update(data)
-            # tratar de obtener el titulo completo del show
-            if 'tituloFicha' in prog.data:
-                prog.title = completar_titulo(prog.title, prog.data['tituloFicha']);
-            return
+            # Comprobacion adicional para determinar si la ficha en cache coincide
+            # con el programa obtenido desde el servidor
+            if prog.title.lower() == self.fichas[tupla][1]['tituloFicha'].lower():
+                # si la respuesta ya estaba en el cache
+                if self.options.verbose:
+                    s_print('Skipping %s ...' % url, file = sys.stderr)
+                (prog.description, prog.data) = self.fichas[tupla]
+                prog.data.update(data)
+                # tratar de obtener el titulo completo del show
+                if 'tituloFicha' in prog.data:
+                    prog.title = completar_titulo(prog.title, prog.data['tituloFicha'])
+                return
         # si la respuesta no estaba en cache
         if self.options.verbose:
             s_print('Retrieving %s ...' % url, file = sys.stderr)
@@ -874,7 +822,7 @@ class TvGrabAr:
         prog.data = data
         # tratar de obtener el titulo completo del show
         if 'tituloFicha' in prog.data:
-            prog.title = completar_titulo(prog.title, prog.data['tituloFicha']);
+            prog.title = completar_titulo(prog.title, prog.data['tituloFicha'])
         # incorporar la descripcion, si existe
         if 'resumenFicha' in data:
             prog.description = data['resumenFicha']
@@ -987,11 +935,23 @@ class TvGrabAr:
             print('Found %d channels enabled.' % enabled, file = sys.stderr)
         return True
 
+    def clean_programs(self, programs):
+        """Eliminar elementos redundantes o nulos de la lista de programas."""
+        # Primero quitamos elementos nulos para evitar excepciones
+        programs = [program for program in programs if program != None]
+        # Eliminamos programas repetidos que estan a la misma hora y canal
+        programs_data = {(prog.channel, prog.start, prog.stop): None for prog in programs}
+        unique_programs = []
+        for prog in programs:
+            prog_data = (prog.channel, prog.start, prog.stop)
+            if programs_data[prog_data] == None:
+                unique_programs.append(prog)
+                programs_data[prog_data] = True
+        return unique_programs
+
     def sort_programs(self, programs):
         """Ordenar una lista de programas segun su hora de inicio."""
         
-        # Quitamos elementos nulos para evitar excepciones
-        programs = [program for program in programs if program != None]
         return sorted(programs, key=cmp_to_key(lambda x,y: int((x.start - y.start).total_seconds())))
 
     def count_programs(self, channels, programs):
